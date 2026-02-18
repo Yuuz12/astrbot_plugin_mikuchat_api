@@ -12,7 +12,7 @@ class UserPlugin(Star):
         super().__init__(context)
 
     @filter.command("user_get")
-    async def user_get(self, event: AstrMessageEvent, qq: int):
+    async def user_get(self, event: AstrMessageEvent, qq: int | None = None):
         async for msg in user_get(event, qq):
             yield msg
 

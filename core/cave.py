@@ -1,4 +1,4 @@
-from astrbot.api.event import filter, AstrMessageEvent
+from astrbot.api.event import AstrMessageEvent
 from astrbot.api import logger
 from astrbot.api.message_components import Image, Plain
 
@@ -30,18 +30,29 @@ async def cave_get(event: AstrMessageEvent):
                 if data.string is None:
                     logger.error("文本回声洞解析出错")
                     raise ValueError("文本回声洞解析出错")
-                yield event.plain_result(data.string)
+                yield event.chain_result([
+                    Plain(
+                        f"===== 回声洞 {data.id} =====\n{data.string}"
+                        f"\n{data.string}"
+                    ),
+                ])
             case 1:
                 if data.string is None:
                     logger.error("图片回声洞解析出错")
                     raise ValueError("图片回声洞解析出错")
-                yield event.image_result(data.string)
+                yield event.chain_result([
+                    Plain(f"===== 回声洞 {data.id} =====\n"),
+                    Image(data.string)
+                ])
             case 2:
                 if data.string is None or data.image is None:
                     logger.error("图文回声洞解析出错")
                     raise ValueError("图文回声洞解析出错")
                 yield event.chain_result([
-                    Plain(data.string),
+                    Plain(
+                        f"===== 回声洞 {data.id} ====="
+                        f"\n{data.string}"
+                    ),
                     Image(data.image)
                 ])
 
