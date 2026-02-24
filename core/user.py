@@ -39,7 +39,7 @@ async def user_get(event: AstrMessageEvent, qq: int | None = None):
         ])
 
 
-async def user_upload_check(event: AstrMessageEvent, qq: int | None = None):
+async def user_update_check(event: AstrMessageEvent, qq: int | None = None):
     user_id = qq or event.get_sender_id()
     logger.info(f"{user_id=}")
     if not isinstance(user_id, int) and not user_id.isdigit():
@@ -83,6 +83,6 @@ async def user_check(event: AstrMessageEvent, qq: int):
 
 __all__ = [
     "user_get",
-    "user_upload_check",
+    "user_update_check",
     "user_check",
 ]

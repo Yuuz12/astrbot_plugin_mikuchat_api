@@ -21,9 +21,9 @@ class UserCheckPlugin(Star):
     def __init__(self, context: Context):
         super().__init__(context)
 
-    @filter.command("user_upload_check")
-    async def user_upload_check(self, event: AstrMessageEvent, qq: int | None = None):
-        async for msg in user_upload_check(event, qq):
+    @filter.command("user_update_check")
+    async def user_update_check(self, event: AstrMessageEvent, qq: int | None = None):
+        async for msg in user_update_check(event, qq):
             yield msg
 
 
