@@ -1,9 +1,9 @@
-# helloworld
+# astrbot_plugin_mikuchat_api
 
-AstrBot 插件模板
+MikuChat-Api
 
-A template plugin for AstrBot plugin feature
+可调用MikuChatApi
 
 # 支持
 
-- [插件开发文档](https://docs.astrbot.app/dev/star/plugin-new.html)
+- [mikuchat-sdk](https://github.com/NumberSir/mikuchat-sdk)

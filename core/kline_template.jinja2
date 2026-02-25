@@ -1,10 +1,326 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-  <meta charset="UTF-8">
-  <title>$Title$</title>
+    <meta charset="utf-8">
+    <title>{{ coin }} K线图</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Microsoft YaHei', Arial, sans-serif;
+            background: linear-gradient(135deg, #0f1419 0%, #1a2332 100%);
+            color: #ffffff;
+            margin: 0;
+            padding: 20px;
+            min-height: 100vh;
+        }
+        .container {
+            max-width: 1000px;
+            margin: 0 auto;
+            background: rgba(30, 35, 45, 0.95);
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .header h1 {
+            font-size: 28px;
+            margin: 0;
+            color: #ffd700;
+            text-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        .header .subtitle {
+            font-size: 14px;
+            color: #8b9dc3;
+            margin-top: 8px;
+        }
+        .chart-wrapper {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .price-axis {
+            width: 60px;
+            height: {{ chart_height }}px;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: flex-end;
+            padding-right: 8px;
+            border-right: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        .price-label-axis {
+            font-size: 11px;
+            color: #8b9dc3;
+            line-height: 1;
+        }
+        .chart-container {
+            flex: 1;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 8px;
+            padding: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+        .grid-lines {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            right: 10px;
+            bottom: 30px;
+            pointer-events: none;
+        }
+        .grid-line {
+            position: absolute;
+            left: 0;
+            right: 0;
+            height: 1px;
+            background: rgba(255, 255, 255, 0.05);
+        }
+        .kline-chart {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-around;
+            height: {{ chart_height }}px;
+            padding-bottom: 25px;
+            position: relative;
+            z-index: 1;
+        }
+        .kline-item {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            position: relative;
+            flex: 1;
+            max-width: 40px;
+            min-width: 12px;
+            height: 100%;
+        }
+        .kline-candle {
+            position: absolute;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        .wick {
+            width: 2px;
+            background: currentColor;
+        }
+        .wick-up {
+            background: #00d084;
+        }
+        .wick-down {
+            background: #ff4757;
+        }
+        .body {
+            width: 70%;
+            min-width: 8px;
+            border-radius: 1px;
+        }
+        .body-up {
+            background: #00d084;
+            border: 1px solid #00b894;
+        }
+        .body-down {
+            background: #ff4757;
+            border: 1px solid #ff3838;
+        }
+        .time-label {
+            position: absolute;
+            bottom: -20px;
+            font-size: 10px;
+            color: #8b9dc3;
+            white-space: nowrap;
+            transform: rotate(-45deg);
+            transform-origin: left top;
+        }
+        .tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.9);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 4px;
+            padding: 8px 12px;
+            font-size: 11px;
+            color: #fff;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 100;
+            white-space: nowrap;
+        }
+        .kline-item:hover .tooltip {
+            opacity: 1;
+        }
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-top: 20px;
+        }
+        .stat-card {
+            background: rgba(255, 255, 255, 0.05);
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+        .stat-label {
+            font-size: 12px;
+            color: #8b9dc3;
+            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .stat-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #ffffff;
+        }
+        .stat-value.up {
+            color: #00d084;
+        }
+        .stat-value.down {
+            color: #ff4757;
+        }
+        .legend {
+            display: flex;
+            justify-content: center;
+            gap: 30px;
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: #8b9dc3;
+        }
+        .legend-candle {
+            width: 12px;
+            height: 16px;
+            border-radius: 1px;
+            position: relative;
+        }
+        .legend-candle::before {
+            content: '';
+            position: absolute;
+            left: 50%;
+            top: -3px;
+            bottom: -3px;
+            width: 1px;
+            transform: translateX(-50%);
+        }
+        .legend-up {
+            background: #00d084;
+            border: 1px solid #00b894;
+        }
+        .legend-up::before {
+            background: #00d084;
+        }
+        .legend-down {
+            background: #ff4757;
+            border: 1px solid #ff3838;
+        }
+        .legend-down::before {
+            background: #ff4757;
+        }
+    </style>
 </head>
 <body>
-$END$
+<div class="container">
+    <div class="header">
+        <h1>{{ coin }} K线图</h1>
+        <div class="subtitle">最近 {{ limit }} 条价格记录 | 更新时间: {{ update_time }}</div>
+    </div>
+
+    <div class="chart-wrapper">
+        <div class="price-axis">
+            <span class="price-label-axis">{{ max_price }}</span>
+            <span class="price-label-axis">{{ "%.2f"|format((max_price|float + min_price|float) / 2 + (max_price|float - min_price|float) / 4) }}</span>
+            <span class="price-label-axis">{{ "%.2f"|format((max_price|float + min_price|float) / 2) }}</span>
+            <span class="price-label-axis">{{ "%.2f"|format((max_price|float + min_price|float) / 2 - (max_price|float - min_price|float) / 4) }}</span>
+            <span class="price-label-axis">{{ min_price }}</span>
+        </div>
+        <div class="chart-container">
+            <div class="grid-lines">
+                <div class="grid-line" style="top: 0%;"></div>
+                <div class="grid-line" style="top: 25%;"></div>
+                <div class="grid-line" style="top: 50%;"></div>
+                <div class="grid-line" style="top: 75%;"></div>
+                <div class="grid-line" style="top: 100%;"></div>
+            </div>
+            <div class="kline-chart">
+                {% for item in history_data %}
+                <div class="kline-item">
+                    <div class="kline-candle" style="top: {{ item.candle_offset }}px;">
+                        <!-- 上影线 -->
+                        <div class="wick {{ 'wick-up' if item.is_up else 'wick-down' }}" 
+                             style="height: {{ item.wick_top_height }}px; flex-shrink: 0;"></div>
+                        
+                        <!-- K线实体 -->
+                        <div class="body {{ 'body-up' if item.is_up else 'body-down' }}"
+                             style="height: {{ item.body_height }}px; flex-shrink: 0;"></div>
+                        
+                        <!-- 下影线 -->
+                        <div class="wick {{ 'wick-up' if item.is_up else 'wick-down' }}" 
+                             style="height: {{ item.wick_bottom_height }}px; flex-shrink: 0;"></div>
+                    </div>
+                    <div class="time-label">{{ item.time }}</div>
+                    <div class="tooltip">
+                        开: {{ item.open_price }}<br>
+                        高: {{ item.high_price }}<br>
+                        低: {{ item.low_price }}<br>
+                        收: {{ item.close_price }}
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">当前价格</div>
+            <div class="stat-value">{{ current_price }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">价格变化</div>
+            <div class="stat-value {{ 'up' if total_change >= 0 else 'down' }}">
+                {{ total_change_display }}%
+            </div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">最高价格</div>
+            <div class="stat-value">{{ max_price }}</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">最低价格</div>
+            <div class="stat-value">{{ min_price }}</div>
+        </div>
+    </div>
+
+    <div class="legend">
+        <div class="legend-item">
+            <div class="legend-candle legend-up"></div>
+            <span>上涨 (收盘 ≥ 开盘)</span>
+        </div>
+        <div class="legend-item">
+            <div class="legend-candle legend-down"></div>
+            <span>下跌 (收盘 < 开盘)</span>
+        </div>
+    </div>
+</div>
 </body>
 </html>

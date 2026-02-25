@@ -1,0 +1,13 @@
+{
+  "platform_id": {
+    "description": "指定 Platform ID(适配器中的机器人名称)",
+    "type": "string"
+  },
+  "enabled_bi_groups": {
+    "description": "启用发送虚拟币随机事件的群聊列表",
+    "type": "list",
+    "items": {"type": "string"},
+    "hint": "只有在这个列表中的群聊才会启用发送虚拟币随机事件功能，如果为空则不启用发送虚拟币随机事件功能",
+    "default": []
+  }
+}
