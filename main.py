@@ -8,7 +8,7 @@ from .core.user import *
 from .core.bi import *
 from .core.bi import update_group_activity, set_plugin_context, set_whitelist_groups, get_whitelist_groups, save_bi_data, load_bi_data, set_plugin_path
 
-@register("MikuchatApi", "Yuuz12", "可调用MikuChat API", "1.4.2", "https://github.com/Yuuz12/astrbot_plugin_mikuchat_api")
+@register("MikuchatApi", "Yuuz12", "可调用MikuChat API", "1.4.3", "https://github.com/Yuuz12/astrbot_plugin_mikuchat_api")
 
 class UserPlugin(Star):
     def __init__(self, context: Context):

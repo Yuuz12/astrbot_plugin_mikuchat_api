@@ -79,7 +79,7 @@ last_event_time = 0  # 上次事件时间
 INACTIVITY_THRESHOLD = 3600  # 1小时无发言视为不活跃
 
 # 历史记录参数
-MAX_HISTORY_SIZE = 720  # 每个收集品最大历史记录数
+MAX_HISTORY_SIZE = 90  # 每个收集品最大历史记录数
 
 # 动态变化度存储
 current_volatility = {coin: base for coin, base in VOLATILITY_BASE.items()}
