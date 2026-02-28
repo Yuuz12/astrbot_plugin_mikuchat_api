@@ -77,7 +77,7 @@ def add_price_record(coin: str, price: float, timestamp: Optional[datetime] = No
         cursor = conn.cursor()
         cursor.execute(
             'INSERT INTO price_history (coin, price, timestamp) VALUES (?, ?, ?)',
-            (coin, price, timestamp)
+            (coin, price, timestamp.isoformat())
         )
         conn.commit()
         conn.close()
