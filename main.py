@@ -145,8 +145,8 @@ class BiPlugin(Star):
             yield msg
 
     @filter.command("bi_history")
-    async def bi_history(self, event: AstrMessageEvent, coin: str, limit: int = 25):
-        async for msg in bi_history(self, event, coin, limit):
+    async def bi_history(self, event: AstrMessageEvent, coin: str, timeframe: int = 10):
+        async for msg in bi_history(self, event, coin, timeframe):
             yield msg
     
     async def terminate(self):

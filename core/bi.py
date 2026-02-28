@@ -12,6 +12,7 @@ import time
 import threading
 import asyncio
 import json
+import sqlite3
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -19,12 +20,145 @@ from .mikuchat_html_render import template_to_pic
 
 # 数据文件路径 - 使用 AstrBot 插件专用目录，在初始化时设置
 DATA_FILE: Optional[Path] = None
+DB_FILE: Optional[Path] = None
 
 
 def set_plugin_path(plugin_name: str):
     """设置数据文件路径，由插件类在初始化时调用"""
-    global DATA_FILE
-    DATA_FILE = Path(get_astrbot_data_path()) / "plugin_data" / plugin_name / "bi_data.json"
+    global DATA_FILE, DB_FILE
+    plugin_dir = Path(get_astrbot_data_path()) / "plugin_data" / plugin_name
+    plugin_dir.mkdir(parents=True, exist_ok=True)
+    DATA_FILE = plugin_dir / "bi_data.json"
+    DB_FILE = plugin_dir / "bi_data.db"
+    init_database()
+
+
+def init_database():
+    """初始化SQLite数据库"""
+    global DB_FILE
+    if DB_FILE is None:
+        return
+    try:
+        conn = sqlite3.connect(str(DB_FILE))
+        cursor = conn.cursor()
+        
+        # 创建价格历史表
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS price_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                coin TEXT NOT NULL,
+                price REAL NOT NULL,
+                timestamp DATETIME NOT NULL
+            )
+        ''')
+        
+        # 创建索引以提高查询效率
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_price_history_coin_timestamp 
+            ON price_history(coin, timestamp)
+        ''')
+        
+        conn.commit()
+        conn.close()
+        logger.info(f"[Database] 数据库初始化完成: {DB_FILE}")
+    except Exception as e:
+        logger.error(f"[Database] 数据库初始化失败: {e}")
+
+
+def add_price_record(coin: str, price: float, timestamp: datetime = None):
+    """添加价格记录到数据库"""
+    global DB_FILE
+    if DB_FILE is None:
+        return
+    if timestamp is None:
+        timestamp = datetime.now()
+    try:
+        conn = sqlite3.connect(str(DB_FILE))
+        cursor = conn.cursor()
+        cursor.execute(
+            'INSERT INTO price_history (coin, price, timestamp) VALUES (?, ?, ?)',
+            (coin, price, timestamp)
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"[Database] 添加价格记录失败: {e}")
+
+
+def get_price_history(coin: str, start_time: datetime = None, end_time: datetime = None, limit: int = None):
+    """从数据库获取价格历史
+    
+    Args:
+        coin: 币种名称
+        start_time: 开始时间
+        end_time: 结束时间
+        limit: 限制返回数量（按时间倒序）
+    
+    Returns:
+        List[Dict]: 价格历史记录列表，每个记录包含 'timestamp' 和 'price'
+    """
+    global DB_FILE
+    if DB_FILE is None:
+        return []
+    try:
+        conn = sqlite3.connect(str(DB_FILE))
+        cursor = conn.cursor()
+        
+        query = 'SELECT timestamp, price FROM price_history WHERE coin = ?'
+        params = [coin]
+        
+        if start_time:
+            query += ' AND timestamp >= ?'
+            params.append(start_time.isoformat())
+        if end_time:
+            query += ' AND timestamp <= ?'
+            params.append(end_time.isoformat())
+        
+        query += ' ORDER BY timestamp DESC'
+        
+        if limit:
+            query += f' LIMIT {limit}'
+        
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+        conn.close()
+        
+        # 转换为与原来相同的格式
+        result = []
+        for row in reversed(rows):  # 反转回时间正序
+            result.append({
+                'timestamp': datetime.fromisoformat(row[0]),
+                'price': row[1]
+            })
+        return result
+    except Exception as e:
+        logger.error(f"[Database] 获取价格历史失败: {e}")
+        return []
+
+
+def cleanup_old_price_records(max_records: int = 10000):
+    """清理旧的价格记录，只保留最近N条"""
+    global DB_FILE
+    if DB_FILE is None:
+        return
+    try:
+        conn = sqlite3.connect(str(DB_FILE))
+        cursor = conn.cursor()
+        for coin in COINS:
+            cursor.execute('''
+                DELETE FROM price_history 
+                WHERE coin = ? AND id NOT IN (
+                    SELECT id FROM price_history 
+                    WHERE coin = ? 
+                    ORDER BY timestamp DESC 
+                    LIMIT ?
+                )
+            ''', (coin, coin, max_records))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logger.error(f"[Database] 清理旧记录失败: {e}")
+
 
 # 虚拟币交易系统 - 轻量化版本
 
@@ -68,7 +202,7 @@ VOLATILITY_MIN_RATIO = 0.5       # 变化度最低为基值的50%
 VOLATILITY_MAX_RATIO = 1.5       # 变化度最高为基值的150%
 
 # 市场变化参数
-UPDATE_INTERVAL = 120  # 2分钟更新一次
+UPDATE_INTERVAL = 60  # 1分钟更新一次
 BUY_FEE = 0.001  # 0.1% 买入手续费
 SELL_FEE = 0.02  # 2% 卖出手续费
 
@@ -88,14 +222,11 @@ last_event_time = 0  # 上次事件时间
 INACTIVITY_THRESHOLD = 3600  # 1小时无发言视为不活跃
 
 # 历史记录参数
-MAX_HISTORY_SIZE = 90  # 每个收集品最大历史记录数
-
 # 动态变化度存储
 current_volatility = {coin: base for coin, base in VOLATILITY_BASE.items()}
 
 # 全局市场数据
 market_prices = INITIAL_PRICES.copy()
-market_history = {coin: [] for coin in COINS}
 last_update_time = time.time()
 
 # 用户资产数据
@@ -336,25 +467,20 @@ async def _call_llm_simple(system_prompt: str, user_prompt: str) -> str:
 
 def _apply_price_change(coin: str, change_percent: float):
     """应用价格变动"""
-    global market_prices, market_history, dynamic_means
-    
+    global market_prices, dynamic_means
+
     with market_update_lock:
         old_price = market_prices[coin]
         new_price = old_price * (1 + change_percent)
         market_prices[coin] = max(0.01, new_price)
-        
+
         # 同时调整动态均值，保持价格和均值的一致性
         old_mean = dynamic_means[coin]
         new_mean = old_mean * (1 + change_percent)
         dynamic_means[coin] = new_mean
-        
-        # 记录价格历史
-        market_history[coin].append({
-            'timestamp': datetime.now(),
-            'price': market_prices[coin]
-        })
-        if len(market_history[coin]) > MAX_HISTORY_SIZE:
-            market_history[coin] = market_history[coin][-MAX_HISTORY_SIZE:]
+
+        # 记录价格历史到数据库
+        add_price_record(coin, market_prices[coin])
         
         logger.info(f"[Event] {coin}积分变动: {old_price:.2f} → {market_prices[coin]:.2f} ({change_percent*100:+.1f}%) | 均值: {old_mean:.2f} → {new_mean:.2f}")
 
@@ -526,8 +652,8 @@ def create_order_id() -> str:
 
 
 def save_bi_data():
-    """保存所有数据到JSON文件"""
-    global market_prices, market_history, user_assets, user_balance, pending_orders, current_volatility
+    """保存所有数据到JSON文件（价格历史已移至数据库）"""
+    global market_prices, user_assets, user_balance, pending_orders, current_volatility
 
     if DATA_FILE is None:
         logger.warning("[Data] 数据文件路径未设置，跳过保存")
@@ -547,19 +673,8 @@ def save_bi_data():
                 order_copy['expires_at'] = order_copy['expires_at'].isoformat()
                 serializable_pending_orders[user_id].append(order_copy)
 
-        # 转换market_history中的datetime
-        serializable_market_history = {}
-        for coin, history in market_history.items():
-            serializable_market_history[coin] = []
-            for record in history:
-                record_copy = record.copy()
-                if isinstance(record_copy['timestamp'], datetime):
-                    record_copy['timestamp'] = record_copy['timestamp'].isoformat()
-                serializable_market_history[coin].append(record_copy)
-
         data = {
             'market_prices': market_prices,
-            'market_history': serializable_market_history,
             'user_assets': user_assets,
             'user_balance': user_balance,
             'pending_orders': serializable_pending_orders,
@@ -576,8 +691,8 @@ def save_bi_data():
 
 
 def load_bi_data():
-    """从JSON文件加载数据"""
-    global market_prices, market_history, user_assets, user_balance, pending_orders, current_volatility
+    """从JSON文件加载数据（价格历史从数据库读取）"""
+    global market_prices, user_assets, user_balance, pending_orders, current_volatility
 
     if DATA_FILE is None:
         logger.warning("[Data] 数据文件路径未设置，跳过加载")
@@ -594,14 +709,6 @@ def load_bi_data():
         # 加载市场价格
         if 'market_prices' in data:
             market_prices = data['market_prices']
-
-        # 加载市场历史（转换时间字符串）
-        if 'market_history' in data:
-            for coin, history in data['market_history'].items():
-                market_history[coin] = []
-                for record in history:
-                    record['timestamp'] = datetime.fromisoformat(record['timestamp'])
-                    market_history[coin].append(record)
 
         # 加载用户资产
         if 'user_assets' in data:
@@ -756,13 +863,8 @@ def update_market_prices():
         new_price = current_price * (1 + total_change)
         market_prices[coin] = max(0.01, new_price)  # 防止积分归零
 
-        # 记录积分历史
-        market_history[coin].append({
-            'timestamp': datetime.now(),
-            'price': market_prices[coin]
-        })
-        if len(market_history[coin]) > MAX_HISTORY_SIZE:
-            market_history[coin] = market_history[coin][-MAX_HISTORY_SIZE:]
+        # 记录积分历史到数据库
+        add_price_record(coin, market_prices[coin])
 
     last_update_time = time.time()
 
@@ -1038,162 +1140,160 @@ async def bi_coins(event: AstrMessageEvent):
     yield event.plain_result(result)
 
 
-async def bi_history(self, event: AstrMessageEvent, coin: str, limit: int = 25):
-    """查询指定收集品历史积分（趋势图表图片）"""
+async def bi_history(self, event: AstrMessageEvent, coin: str, timeframe: int = 10):
+    """查询指定收集品历史积分（趋势图表图片）
+
+    Args:
+        timeframe: 时间周期（分钟），如 1, 5, 10, 60
+    """
     coin = coin.upper()
     if coin not in COINS:
         yield event.plain_result(f"❌ 不支持的收集品: {coin}\n支持收集品: {', '.join(COINS)}")
         return
 
-    if limit <= 0 or limit > 25:
-        yield event.plain_result("❌ 查询数量必须在1-25之间")
+    if timeframe <= 0:
+        yield event.plain_result(f"❌ 时间周期必须大于0")
         return
 
-    history_data = market_history.get(coin, [])
-    if not history_data:
+    minutes_per_kline = timeframe
+    kline_count = 25  # 固定绘制25条K线
+    
+    # 计算需要查询的时间范围
+    total_minutes_needed = minutes_per_kline * kline_count
+    end_time = datetime.now()
+    start_time = end_time - timedelta(minutes=total_minutes_needed)
+    
+    # 从数据库获取历史数据
+    filtered_history = get_price_history(coin, start_time=start_time, end_time=end_time)
+    if not filtered_history:
         yield event.plain_result(f"❌ {coin} 暂无历史积分数据")
         return
     
-    # 获取最近的历史记录
-    recent_history = history_data[-limit:]
+    if not filtered_history:
+        yield event.plain_result(f"❌ {coin} 在指定时间范围内暂无数据")
+        return
+    
     current_price = get_coin_price(coin)
     
-    # 计算真实的K线数据 (OHLC: Open, High, Low, Close)
-    kline_data = []
+    # 按时间周期聚合数据，生成K线
+    klines = []
     
-    if len(recent_history) > 0:
-        # 第一步：先计算所有K线的OHLC数据
-        raw_klines = []
-        all_prices = []  # 收集所有价格用于确定显示范围
+    # 生成时间区间
+    for i in range(kline_count):
+        interval_end = end_time - timedelta(minutes=i * minutes_per_kline)
+        interval_start = interval_end - timedelta(minutes=minutes_per_kline)
         
-        for i, record in enumerate(recent_history):
-            close_price = record['price']
+        # 获取该时间区间内的所有价格记录
+        interval_records = [
+            record for record in filtered_history
+            if interval_start <= record['timestamp'] < interval_end
+        ]
+        
+        if interval_records:
+            # 按时间排序
+            interval_records.sort(key=lambda x: x['timestamp'])
             
-            # 计算开盘价（使用前一个收盘价，第一个使用当前价格）
-            if i == 0:
-                open_price = close_price
-            else:
-                open_price = recent_history[i-1]['price']
+            # 计算OHLC
+            open_price = interval_records[0]['price']  # 第一个价格作为开盘价
+            close_price = interval_records[-1]['price']  # 最后一个价格作为收盘价
+            high_price = max(r['price'] for r in interval_records)  # 最高价
+            low_price = min(r['price'] for r in interval_records)  # 最低价
             
-            # 根据涨跌幅计算最高最低价（模拟真实K线）
-            change = close_price - open_price
-            volatility = record.get('volatility', 0.02)
-            
-            # 计算影线长度（限制在合理范围内，最大为实体高度的50%）
-            body_height_price = abs(close_price - open_price)
-            max_wick_length = max(body_height_price * 0.5, open_price * volatility * 0.1)
-
-            # 最高价和最低价基于实体上下变化
-            if change >= 0:  # 上涨
-                high_price = close_price + random.uniform(0, max_wick_length)
-                low_price = open_price - random.uniform(0, max_wick_length)
-            else:  # 下跌
-                high_price = open_price + random.uniform(0, max_wick_length)
-                low_price = close_price - random.uniform(0, max_wick_length)
-            
-            # 确保高低价包含开收盘价，且价格在合理范围内
-            high_price = max(high_price, open_price, close_price)
-            low_price = min(low_price, open_price, close_price)
-            
-            # 确保价格不为负
-            low_price = max(0.01, low_price)
-            
-            # 判断涨跌
-            is_up = close_price >= open_price
-            
-            # 收集所有价格点
-            all_prices.extend([open_price, high_price, low_price, close_price])
-            
-            raw_klines.append({
-                'time': record['timestamp'].strftime('%H:%M'),
+            klines.append({
+                'time': interval_end.strftime('%H:%M'),
                 'open_price': open_price,
                 'close_price': close_price,
                 'high_price': high_price,
                 'low_price': low_price,
-                'is_up': is_up
-            })
-        
-        # 第二步：计算显示范围（基于所有高低价）
-        max_price = max(all_prices)
-        min_price = min(all_prices)
-        price_range = max_price - min_price
-        
-        # 图表尺寸配置
-        chart_height = 280  # 图表总高度
-        
-        # 扩大纵坐标范围，留出上下边距，确保K线能完整显示
-        padding_ratio = 0.10  # 上下各留10%的边距
-        display_min = min_price - price_range * padding_ratio
-        display_max = max_price + price_range * padding_ratio
-        display_range = display_max - display_min
-        
-        # 确保显示范围不为零
-        if display_range <= 0:
-            display_range = max_price * 0.1
-            display_min = min_price - display_range / 2
-            display_max = max_price + display_range / 2
-        
-        # 第三步：计算像素位置并生成最终数据
-        for kline in raw_klines:
-            open_price = kline['open_price']
-            close_price = kline['close_price']
-            high_price = kline['high_price']
-            low_price = kline['low_price']
-            is_up = kline['is_up']
-            
-            # 计算在图表中的位置（使用扩大后的显示范围）
-            # 注意：Y轴向下为正，所以高价对应较小的Y值（在上方）
-            if display_range > 0:
-                # 计算价格相对于显示范围的比例（0-1）
-                high_ratio = (high_price - display_min) / display_range
-                low_ratio = (low_price - display_min) / display_range
-                open_ratio = (open_price - display_min) / display_range
-                close_ratio = (close_price - display_min) / display_range
-                
-                # 转换为像素位置（从顶部开始，高价在上方=小Y值）
-                # 1 - ratio 是因为高价应该在上方（Y值小）
-                high_px = int((1 - high_ratio) * chart_height)
-                low_px = int((1 - low_ratio) * chart_height)
-                open_px = int((1 - open_ratio) * chart_height)
-                close_px = int((1 - close_ratio) * chart_height)
-            else:
-                high_px = low_px = open_px = close_px = chart_height // 2
-            
-            # 确定各部分的像素位置
-            top_px = high_px  # 最高点（Y值较小）
-            bottom_px = low_px  # 最低点（Y值较大）
-            body_top_px = min(open_px, close_px)  # 实体顶部（较小的Y值）
-            body_bottom_px = max(open_px, close_px)  # 实体底部（较大的Y值）
-            
-            # 计算影线高度
-            wick_top_height = body_top_px - top_px  # 上影线高度
-            wick_bottom_height = bottom_px - body_bottom_px  # 下影线高度
-            
-            # 计算实体高度（至少4px）
-            body_height = max(4, body_bottom_px - body_top_px)
-            
-            # 计算K线柱在kline-item中的偏移量（相对于kline-item顶部）
-            # 由于kline-item高度=chart_height，所以直接使用top_px
-            candle_offset = top_px
-            
-            kline_data.append({
-                'time': kline['time'],
-                'open_price': f"{open_price:.2f}",
-                'close_price': f"{close_price:.2f}",
-                'high_price': f"{high_price:.2f}",
-                'low_price': f"{low_price:.2f}",
-                'wick_top_height': max(0, wick_top_height),
-                'wick_bottom_height': max(0, wick_bottom_height),
-                'body_height': body_height,
-                'candle_offset': candle_offset,
-                'total_height': bottom_px - top_px,
-                'is_up': is_up
+                'is_up': close_price >= open_price
             })
     
+    # 反转K线数据（从早到晚）
+    klines.reverse()
+    
+    # 调整开盘价：使用前一个K线的收盘价（除了第一个）
+    for i in range(1, len(klines)):
+        klines[i]['open_price'] = klines[i-1]['close_price']
+        # 重新判断涨跌
+        klines[i]['is_up'] = klines[i]['close_price'] >= klines[i]['open_price']
+    
+    if not klines:
+        yield event.plain_result(f"❌ {coin} 无法生成K线数据")
+        return
+    
+    # 计算显示范围
+    all_prices = []
+    for k in klines:
+        all_prices.extend([k['open_price'], k['high_price'], k['low_price'], k['close_price']])
+    
+    max_price = max(all_prices)
+    min_price = min(all_prices)
+    price_range = max_price - min_price
+    
+    # 图表尺寸配置
+    chart_height = 280
+    
+    # 扩大纵坐标范围，留出上下边距
+    padding_ratio = 0.10
+    display_min = min_price - price_range * padding_ratio
+    display_max = max_price + price_range * padding_ratio
+    display_range = display_max - display_min
+    
+    if display_range <= 0:
+        display_range = max_price * 0.1
+        display_min = min_price - display_range / 2
+        display_max = max_price + display_range / 2
+    
+    # 计算像素位置并生成最终数据
+    kline_data = []
+    for kline in klines:
+        open_price = kline['open_price']
+        close_price = kline['close_price']
+        high_price = kline['high_price']
+        low_price = kline['low_price']
+        is_up = kline['is_up']
+        
+        if display_range > 0:
+            high_ratio = (high_price - display_min) / display_range
+            low_ratio = (low_price - display_min) / display_range
+            open_ratio = (open_price - display_min) / display_range
+            close_ratio = (close_price - display_min) / display_range
+            
+            high_px = int((1 - high_ratio) * chart_height)
+            low_px = int((1 - low_ratio) * chart_height)
+            open_px = int((1 - open_ratio) * chart_height)
+            close_px = int((1 - close_ratio) * chart_height)
+        else:
+            high_px = low_px = open_px = close_px = chart_height // 2
+        
+        top_px = high_px
+        bottom_px = low_px
+        body_top_px = min(open_px, close_px)
+        body_bottom_px = max(open_px, close_px)
+        
+        wick_top_height = body_top_px - top_px
+        wick_bottom_height = bottom_px - body_bottom_px
+        body_height = max(4, body_bottom_px - body_top_px)
+        candle_offset = top_px
+        
+        kline_data.append({
+            'time': kline['time'],
+            'open_price': f"{open_price:.2f}",
+            'close_price': f"{close_price:.2f}",
+            'high_price': f"{high_price:.2f}",
+            'low_price': f"{low_price:.2f}",
+            'wick_top_height': max(0, wick_top_height),
+            'wick_bottom_height': max(0, wick_bottom_height),
+            'body_height': body_height,
+            'candle_offset': candle_offset,
+            'total_height': bottom_px - top_px,
+            'is_up': is_up
+        })
+    
     # 计算统计信息
-    if len(recent_history) >= 2:
-        first_price = recent_history[0]['price']
-        last_price = recent_history[-1]['price']
+    if len(klines) >= 2:
+        first_price = klines[0]['open_price']
+        last_price = klines[-1]['close_price']
         total_change = ((last_price - first_price) / first_price) * 100
         total_change_display = total_change
     else:
@@ -1203,7 +1303,7 @@ async def bi_history(self, event: AstrMessageEvent, coin: str, limit: int = 25):
     # 准备模板数据
     template_data = {
         'coin': coin,
-        'limit': limit,
+        'timeframe': timeframe,
         'update_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
         'history_data': kline_data,
         'columns': len(kline_data) if kline_data else 1,
@@ -1217,9 +1317,7 @@ async def bi_history(self, event: AstrMessageEvent, coin: str, limit: int = 25):
     
     # 使用HTML模板渲染趋势图表
     try:
-        # 检查是否有html_render方法可用
         if hasattr(self, 'html_render'):
-            # url = await self.html_render(tmpl=KLINE_TEMPLATE, data=template_data)
             await template_to_pic(
                 template_name="kline_template.jinja2",
                 template_path=str(Path(__file__).parent),
@@ -1227,30 +1325,27 @@ async def bi_history(self, event: AstrMessageEvent, coin: str, limit: int = 25):
             )
             yield event.image_result(url_or_path=str(Path(__file__).parent / "html_render_cache" / "kline.png"))
         else:
-            # 如果没有html_render方法，回退到文本显示
-            result = f"📈 {coin} 历史积分（最近{len(recent_history)}条）\n"
+            # 回退到文本显示
+            result = f"📈 {coin} K线图表 ({timeframe}分钟)\n"
             result += f"━━━━━━━━━━━━━━\n"
             result += f"当前积分: {current_price:.2f}\n"
-            result += f"\n🕒 历史记录:\n"
+            result += f"K线数量: {len(klines)}条\n"
+            result += f"\n🕒 K线数据:\n"
 
-            for i, record in enumerate(recent_history, 1):
-                timestamp = record['timestamp'].strftime('%H:%M:%S')
-                price = record['price']
-                change_percent = record.get('change_percent', 0) * 100
-                volatility = record.get('volatility', 0) * 100
+            for i, k in enumerate(klines, 1):
+                change = k['close_price'] - k['open_price']
+                change_pct = (change / k['open_price']) * 100 if k['open_price'] > 0 else 0
+                change_symbol = "↗️" if change >= 0 else "↘️"
+                
+                result += f"{i}. {k['time']} O:{k['open_price']:.2f} H:{k['high_price']:.2f} L:{k['low_price']:.2f} C:{k['close_price']:.2f} {change_symbol}{abs(change_pct):.1f}%\n"
 
-                change_symbol = "↗️" if change_percent > 0 else "↘️" if change_percent < 0 else "➡️"
-
-                result += f"{i}. {timestamp} - {price:.2f} {change_symbol}{abs(change_percent):.1f}% (变化度: {volatility:.1f}%)\n"
-
-            if len(recent_history) >= 2:
+            if len(klines) >= 2:
                 result += f"\n📊 统计信息:\n"
                 result += f"• 起始积分: {first_price:.2f}\n"
                 result += f"• 结束积分: {last_price:.2f}\n"
                 result += f"• 总变化: {total_change:+.1f}%\n"
-                result += f"• 记录数量: {len(recent_history)}条\n"
 
-            result += f"\n💡 提示: 使用 bi_history <收集品> [数量] 查询更多历史记录"
+            result += f"\n💡 提示: 使用 bi_history <收集品> [分钟数] 切换时间周期"
             yield event.plain_result(result)
 
     except Exception as e:
@@ -1291,10 +1386,10 @@ async def bi_volatility(event: AstrMessageEvent):
         result += f"  基准: {base_vol_percent:.1f}% | 当前积分: {current_price:.2f}\n"
 
     result += f"\n💡 动态变化度说明:\n"
-    result += f"• 变化度每120秒随机变化 ±0.5%\n"
+    result += f"• 变化度每60秒随机变化 ±0.5%\n"
     result += f"• 变化度保底范围: 基准的50%-200%\n"
     result += f"• 变化剧烈的收集品积分变化大，收集更有挑战性\n"
-    result += f"• 积分每120秒自动更新\n"
+    result += f"• 积分每60秒自动更新\n"
 
     yield event.plain_result(result)
 
@@ -1308,7 +1403,7 @@ async def bi_help(event: AstrMessageEvent):
     result += f"• bi_price [收集品] - 查看积分（不指定收集品显示全部）\n"
     result += f"• bi_coins - 查看可收集收集品列表\n"
     result += f"• bi_volatility - 查看收集品变化度特性\n"
-    result += f"• bi_history <收集品> [数量] - 查询历史积分（默认25条，最多25条）\n"
+    result += f"• bi_history <收集品> [时间周期] - 查询K线图表（默认10分钟，支持任意分钟数）\n"
 
     result += f"\n💸 兑换命令:\n"
     result += f"• bi_buy <收集品> <数量> [积分] - 兑换收集品（积分可选，默认当前积分）\n"
@@ -1322,7 +1417,7 @@ async def bi_help(event: AstrMessageEvent):
     result += f"• bi_help - 查看此帮助信息\n"
 
     result += f"\n📊 系统特性:\n"
-    result += f"• 积分每120秒自动变化一次\n"
+    result += f"• 积分每60秒自动变化一次\n"
     result += f"• 不同收集品有差异化变化度（2%-10%）\n"
     result += f"• 兑换服务费: {BUY_FEE*100:.1f}%\n"
     result += f"• 回收服务费: {SELL_FEE*100:.1f}%\n"
