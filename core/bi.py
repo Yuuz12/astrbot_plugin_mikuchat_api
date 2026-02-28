@@ -210,7 +210,7 @@ SELL_FEE = 0.02  # 2% 卖出手续费
 MEAN_REVERSION_STRENGTH = 0.1  # 均值回归强度（0-1之间，越大回归越快）
 
 # 动态均值上升参数
-MEAN_GROWTH_RATE = 0.0001  # 均值每次更新增长初始价格的 0.01%（线性增长）
+MEAN_GROWTH_RATE = 0.001  # 均值每次更新增长初始价格的 0.1%（线性增长）
 
 # 动态均值存储
 dynamic_means = INITIAL_PRICES.copy()  # 初始均值为初始价格
