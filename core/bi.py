@@ -351,11 +351,7 @@ def _apply_price_change(coin: str, change_percent: float):
         # 记录价格历史
         market_history[coin].append({
             'timestamp': datetime.now(),
-            'price': market_prices[coin],
-            'change_percent': change_percent,
-            'volatility': current_volatility[coin],
-            'event_triggered': True,
-            'current_mean': new_mean
+            'price': market_prices[coin]
         })
         if len(market_history[coin]) > MAX_HISTORY_SIZE:
             market_history[coin] = market_history[coin][-MAX_HISTORY_SIZE:]
@@ -763,11 +759,7 @@ def update_market_prices():
         # 记录积分历史
         market_history[coin].append({
             'timestamp': datetime.now(),
-            'price': market_prices[coin],
-            'change_percent': total_change,
-            'volatility': coin_volatility,
-            'reversion_force': reversion_force,
-            'current_mean': current_mean
+            'price': market_prices[coin]
         })
         if len(market_history[coin]) > MAX_HISTORY_SIZE:
             market_history[coin] = market_history[coin][-MAX_HISTORY_SIZE:]
