@@ -1158,9 +1158,9 @@ async def bi_history(self, event: AstrMessageEvent, coin: str, timeframe: int = 
     minutes_per_kline = timeframe
     kline_count = 25  # 固定绘制25条K线
     
-    # 计算需要查询的时间范围
+    # 计算需要查询的时间范围（使用对齐到整分钟的时间）
     total_minutes_needed = minutes_per_kline * kline_count
-    end_time = datetime.now()
+    end_time = datetime.now().replace(second=0, microsecond=0)
     start_time = end_time - timedelta(minutes=total_minutes_needed)
     
     # 从数据库获取历史数据
@@ -1212,9 +1212,15 @@ async def bi_history(self, event: AstrMessageEvent, coin: str, timeframe: int = 
     klines.reverse()
     
     # 调整开盘价：使用前一个K线的收盘价（除了第一个）
+    # 同时需要更新最高价和最低价，确保包含新的开盘价
     for i in range(1, len(klines)):
-        klines[i]['open_price'] = klines[i-1]['close_price']
-        # 重新判断涨跌
+        new_open = klines[i-1]['close_price']
+        old_high = klines[i]['high_price']
+        old_low = klines[i]['low_price']
+        klines[i]['open_price'] = new_open
+        # 更新最高价和最低价，确保包含新的开盘价
+        klines[i]['high_price'] = max(old_high, new_open)
+        klines[i]['low_price'] = min(old_low, new_open)
         klines[i]['is_up'] = klines[i]['close_price'] >= klines[i]['open_price']
     
     if not klines:
